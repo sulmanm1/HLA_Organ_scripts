@@ -96,24 +96,61 @@ aaregmodel<-aareg(formula=Surv(Time, status)~ A.Mismatch.No.
 aaregmodel
 autoplot(aaregmodel)
 
-modelaft<-function(df, var){
-  types=c("logistic", "weibull", "lognormal", "gaussian", "loglogistic", "exponential")
-  AIC.data<-data.frame(
-    model=c(),
-    AIC_val=c()
+modelaft <- function(df, var) {
+  types <- c("logistic", "weibull", "lognormal", "gaussian", "loglogistic", "exponential")
+  AIC.data <- data.frame(
+    model = character(),
+    AIC_val = numeric()
   )
-  for (model in types){
-    print(model)
-    aftmodel <- survreg(Surv(Time, status) ~ var + Age.at.Transplant, data = df, dist = model)
-    model.data<-data.frame(
-      model=c(model),
-      AIC_val=c(AIC(aftmodel))
+  for (model in types) {
+    # Construct the formula dynamically
+    formula_str <- paste("Surv(Time, status) ~", var, "+ Age.at.Transplant")
+    formula <- as.formula(formula_str)
+    
+    # Fit the model using the dynamically constructed formula
+    aftmodel <- survreg(formula, data = df, dist = model)
+    
+    # Extract the AIC and store it along with the model type
+    model.data <- data.frame(
+      model = model,
+      AIC_val = AIC(aftmodel)
     )
-    print(summary(aftmodel))
-    AIC.data<-rbind(AIC.data, model.data)
+    
+    # Optionally print the model summary
+    
+    # Append the model data to the AIC.data dataframe
+    AIC.data <- rbind(AIC.data, model.data)
   }
-  return(AIC.data)
+  
+  
+  best_model<-AIC.data[which.min(AIC.data$AIC_val),1]
+  best_AIC<-AIC.data[which.min(AIC.data$AIC_val),2]
+  formula_str <- paste("Surv(Time, status) ~", var, "+ Age.at.Transplant")
+  formula <- as.formula(formula_str)
+  aftmodel <- survreg(formula, data = df, dist = best_model)
+  
+  p_value<-summary(aftmodel)$table[2,4]
+  coeff<-summary(aftmodel)$table[2,1]
+  return(data.frame(var, p_value, coeff, best_model, best_AIC))
 }
 
-modelaft(df, var)
+
+model_all_var<-function(df, colnames){
+  results_df<-data.frame(
+    var<-c(),
+    p_value<-c(),
+    coeff<-c(),
+    best_model<-c(),
+    best_AIC<-c()
+  )
+  for(variable in colnames){
+    results_df<-rbind(results_df, modelaft(df,variable))
+  }
+  return(results_df)
+}
+
+
+
+colnames<-c("A.Mismatch.No.", "B.Mismatch.No.", "C.Mismatch.No.", "ClassI...Mismatch.All", "DRB1.Mismatch.No.","DRB345.Mismatch.No.", "DP.Mismatch.No.","DQ..Mismatch.No.", "ClassII...Mismatch.All")
+model_all_var(df, colnames)
 
