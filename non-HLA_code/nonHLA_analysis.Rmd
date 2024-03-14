@@ -1,0 +1,434 @@
+---
+title: "Mulinomial logistic regression of non-HLA data"
+date: "2024-03-03"
+author: "Muhammad Sulman"
+email: "sulmanmu40@gmail.com"
+github: "https://github.com/sulmanm1"
+output: html_document
+---
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r include=FALSE}
+library(rmarkdown)
+library(brant)
+library(splines)
+library(car)
+library(tidyverse)
+library(MASS)
+library(brant)
+library(effects)
+library(corrplot)
+library(jtools)
+```
+
+Function to load data from non-HLA. Converts all columns to the appropriate types.
+
+```{r}
+load_data <- function() {
+  df<- read.csv("data/non_HLA.csv")
+  df$Sex <- df$Sex %>% as.factor()
+  df$Condition <- df$Condition %>% 
+    as.factor()
+  num_colnames<-c("AT1R.U.mL..CO.17.", "ENO1.Normalized..CO.4218.",
+                  "FLRT2.Normalized..CO.688.", "VM.Normalized..CO.820.",
+                  "TUBA1B.Normalized..CO.1987.", "IFIH1.Normalized..CO.3870.",
+                  "PTPRN.Normalized..CO.3042.", "AURKA.Normalized..CO.4892.",
+                  "PPIA.Normalized..CO.3292.", "EIF2A.Normalized..CO.6901.",
+                  "PECR.Normalized..CO.4120.", "PRKCH.Normalized..CO.1048.",
+                  "CXCL11.Normalized..CO.309.", "CXCL10.Normalized..CO.285.",
+                  "AGRIN.Normalized..CO.504.", "GAPDH.Normalized..CO.508.",
+                  "MYOSIN.Normalized..CO.9341.", "AGT.Normalized..CO.1641.",
+                  "CHAF1B.Normalized..CO.11722.", "PLA2R.Normalized..CO.195.",
+                  "LG3.Normalized..CO.3801.", "GSTT1.Normalized..CO.6136.",
+                  "LMNA.Normalized..CO.6633.", "PRKCZ.Normalized..CO.9104.",
+                  "LMNB1.Normalized..CO.2065.", "ARHGDIB.Normalized..CO.3918.",
+                  "HNRNPK.Normalized..CO.845.", "IFNG.Normalized..CO.498.",
+                  "REG3A.Normalized..CO.86.", "NUCLEOLIN.Normalized..CO.3669.",
+                  "CD36.Normalized..CO.1591.", "TNFA.Normalized..CO.5331.",
+                  "CXCL9.Normalized..CO.575.", "GDNF.Normalized..CO.1004.",
+                  "COLLAGEN.I.Normalized..CO.375.", "COLLAGEN.II.Normalized..CO.155.",
+                  "COLLAGEN.III.Normalized..CO.128.", "COLLAGEN.IV.Normalized..CO.71.",
+                  "COLLAGEN.V.Normalized..CO.187.", "FIBRONECTIN.Normalized..CO.141.",
+                  "Age.at.Transplant", "DSA_num")
+  df <- df %>% mutate(across(all_of(num_colnames), ~as.numeric(as.character(.))))
+  df$AGRIN.Normalized..CO.504. <- df$AGRIN.Normalized..CO.504./10
+  df$AGT.Normalized..CO.1641. <- df$AGT.Normalized..CO.1641./100
+  df$ARHGDIB.Normalized..CO.3918. <- df$ARHGDIB.Normalized..CO.3918./100
+  df$AURKA.Normalized..CO.4892. <- df$AURKA.Normalized..CO.4892./100
+  df$CD36.Normalized..CO.1591. <- df$CD36.Normalized..CO.1591./100
+  df$CHAF1B.Normalized..CO.11722. <- df$CHAF1B.Normalized..CO.11722./100
+  df$COLLAGEN.I.Normalized..CO.375. <- df$COLLAGEN.I.Normalized..CO.375./10
+  df$COLLAGEN.II.Normalized..CO.155. <- df$COLLAGEN.II.Normalized..CO.155./10
+  df$COLLAGEN.III.Normalized..CO.128. <- df$COLLAGEN.III.Normalized..CO.128./10
+  df$COLLAGEN.IV.Normalized..CO.71. <- df$COLLAGEN.IV.Normalized..CO.71./10
+  df$COLLAGEN.V.Normalized..CO.187. <- df$COLLAGEN.V.Normalized..CO.187./10
+  df$CXCL10.Normalized..CO.285. <- df$CXCL10.Normalized..CO.285./10
+  df$CXCL11.Normalized..CO.309. <- df$CXCL11.Normalized..CO.309./10
+  df$CXCL9.Normalized..CO.575. <- df$CXCL9.Normalized..CO.575./100
+  df$EIF2A.Normalized..CO.6901. <- df$EIF2A.Normalized..CO.6901./100
+  df$ENO1.Normalized..CO.4218. <- df$ENO1.Normalized..CO.4218./100
+  df$FIBRONECTIN.Normalized..CO.141. <- df$FIBRONECTIN.Normalized..CO.141./10
+  df$FLRT2.Normalized..CO.688. <- df$FLRT2.Normalized..CO.688./100
+  df$GAPDH.Normalized..CO.508. <- df$GAPDH.Normalized..CO.508./100
+  df$GDNF.Normalized..CO.1004. <- df$GDNF.Normalized..CO.1004./100
+  df$GSTT1.Normalized..CO.6136. <- df$GSTT1.Normalized..CO.6136./100
+  df$HNRNPK.Normalized..CO.845. <- df$HNRNPK.Normalized..CO.845./100
+  df$IFNG.Normalized..CO.498. <- df$IFNG.Normalized..CO.498./100
+  df$IFIH1.Normalized..CO.3870. <- df$IFIH1.Normalized..CO.3870./100
+  df$LG3.Normalized..CO.3801. <- df$LG3.Normalized..CO.3801./100
+  df$LMNA.Normalized..CO.6633. <- df$LMNA.Normalized..CO.6633./100
+  df$LMNB1.Normalized..CO.2065. <- df$LMNB1.Normalized..CO.2065./100
+  df$MYOSIN.Normalized..CO.9341. <- df$MYOSIN.Normalized..CO.9341./100
+  df$NUCLEOLIN.Normalized..CO.3669. <- df$NUCLEOLIN.Normalized..CO.3669./10
+  df$PECR.Normalized..CO.4120. <- df$PECR.Normalized..CO.4120./100
+  df$PLA2R.Normalized..CO.195. <- df$PLA2R.Normalized..CO.195./100
+  df$PPIA.Normalized..CO.3292. <- df$PPIA.Normalized..CO.3292./100
+  df$PRKCZ.Normalized..CO.9104. <- df$PRKCZ.Normalized..CO.9104./100
+  df$PRKCH.Normalized..CO.1048. <- df$PRKCH.Normalized..CO.1048./100
+  df$PTPRN.Normalized..CO.3042. <- df$PTPRN.Normalized..CO.3042./100
+  df$REG3A.Normalized..CO.86. <- df$REG3A.Normalized..CO.86./10
+  df$TNFA.Normalized..CO.5331. <- df$TNFA.Normalized..CO.5331./100
+  df$TUBA1B.Normalized..CO.1987. <- df$TUBA1B.Normalized..CO.1987./100
+  df$VM.Normalized..CO.820. <- df$VM.Normalized..CO.820./100
+  return(df)
+}
+```
+
+Function to replace normalized values with "1" for above cutoff and "0" for below. Cutoff numbers are in the column names.
+
+```{r}
+process_columns_with_cutoff <- function(colnames_vector, df) { 
+  # Loop through each column name provided in the vector 
+  for (colname in colnames_vector) {
+    cutoff_str <- sub(".*CO\\.", "", colname)
+    cutoff_str <- gsub("\\..*", "", cutoff_str)
+    cutoff <- as.numeric(cutoff_str)
+    df[[colname]] <- ifelse(df[[colname]] > cutoff, 1, 0)
+    #df[[colname]] <- as.factor(df[[colname]])
+  }
+  return(df)
+}
+
+```
+
+Function to plot distributions of continuous variables.
+
+```{r}
+plot_variable_distributions <- function(data, variable_names, outcome_var) { 
+  # Pivot the data frame to long format 
+  data_long <- pivot_longer(data, cols = all_of(variable_names), names_to = "variable", values_to = "value")
+
+  # Filter out rows with NA values in 'value' to avoid issues in plotting
+  data_long <- na.omit(data_long)
+  
+  # Plot data with aes() adjusted to include color based on the outcome variable
+  p <- ggplot(data_long, aes(x = value, fill = as.factor(get(outcome_var)), color = as.factor(get(outcome_var)))) +
+    geom_density(alpha = 0.3) +  # Adjust alpha for fill transparency
+    facet_wrap(~variable, scales = "free", nrow = 20) +
+    scale_fill_brewer(palette = "Set1", name = outcome_var) +
+    scale_color_brewer(palette = "Set1", name = outcome_var) +  # Add this line to use consistent color palette for lines
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    labs(x = "Value", y = "Density") 
+  
+  # Alter text for readability
+  p <- p + theme(strip.text = element_text(size = 8),  # Text size
+                 strip.text.x = element_text(angle = 0, hjust = 0.5),  # Adjust angle and horizontal justification
+                 strip.background = element_rect(fill = "white"))  # Change background color for visibility
+  print(p)
+  ggsave("variable_distributions.svg")
+}
+```
+
+Function that returns subsetted data frame based on the column names provided
+
+```{r}
+create_subset_df <- function(original_df, colnames_array) {
+  # Ensure that the column names exist in the original dataframe 
+  valid_colnames <- colnames_array[colnames_array %in% names(original_df)]
+
+  subset_df <- original_df[, valid_colnames, drop = FALSE]
+  return(subset_df)
+}
+```
+
+Return all highly correlated variables
+
+```{r}
+find_highly_correlated_variables <- function(dataframe, column_names, threshold = 0.8) {
+  subset_df <- dataframe[, column_names]
+  corr_matrix <- cor(subset_df, use = "complete.obs")  # 'complete.obs' handles missing values by using complete cases
+  high_corr_pairs <- which(abs(corr_matrix) > threshold & lower.tri(corr_matrix), arr.ind = TRUE)
+  
+  # Extract the variable names for these pairs
+  high_corr_vars <- unique(c(column_names[high_corr_pairs[, "row"]], column_names[high_corr_pairs[, "col"]]))
+  
+  return(high_corr_vars)
+}
+```
+
+Write formulas for the multinomial logistic regression
+
+```{r}
+create_pom_formula <- function(response_var, clin_cofactors, independent_vars, df) {
+  all_vars <- c(response_var, clin_cofactors, independent_vars) 
+  missing_vars <- setdiff(all_vars, names(df))
+  
+  if(length(missing_vars) > 0) { stop(paste("The following variables are missing in the dataframe:",
+                                             paste(missing_vars, collapse=", "), ".")) 
+    }
+  predictors <- c(clin_cofactors, independent_vars)
+  formula_str <- paste(response_var, "~", paste(predictors, collapse = " + "))
+  return(as.formula(formula_str))
+}
+```
+
+Function to create a PCA column
+
+```{r}
+addPCAComponent <- function(dataframe, columns, pcaColumnName) {
+  subset_df <- dataframe[, columns, drop = FALSE]
+  pca_result <- prcomp(subset_df, center = TRUE, scale. = TRUE)
+  
+  # Extract the first principal component
+  first_pca_component <- pca_result$x[, 1]
+  dataframe[[pcaColumnName]] <- first_pca_component
+  return(dataframe)
+}
+```
+
+Saving the names of the independent variables and the continuous independent variables
+
+```{r}
+#missing fibronectin and pla2r because they have low levels of fluorescence => inaccurate OR.
+tot_nHLA_var<-c("AT1R.U.mL..CO.17.",
+"ENO1.Normalized..CO.4218.", "FLRT2.Normalized..CO.688.",
+"VM.Normalized..CO.820.", "TUBA1B.Normalized..CO.1987.",
+"IFIH1.Normalized..CO.3870.", "PTPRN.Normalized..CO.3042.",
+"AURKA.Normalized..CO.4892.", "PPIA.Normalized..CO.3292.",
+"EIF2A.Normalized..CO.6901.", "PECR.Normalized..CO.4120.",
+"PRKCH.Normalized..CO.1048.", "CXCL11.Normalized..CO.309.",
+"CXCL10.Normalized..CO.285.", "AGRIN.Normalized..CO.504.",
+"GAPDH.Normalized..CO.508.", "MYOSIN.Normalized..CO.9341.",
+"AGT.Normalized..CO.1641.", "CHAF1B.Normalized..CO.11722.",
+"LG3.Normalized..CO.3801.", "GSTT1.Normalized..CO.6136.", "LMNA.Normalized..CO.6633.",
+"PRKCZ.Normalized..CO.9104.", "LMNB1.Normalized..CO.2065.",
+"ARHGDIB.Normalized..CO.3918.", "HNRNPK.Normalized..CO.845.",
+"IFNG.Normalized..CO.498.", "REG3A.Normalized..CO.86.",
+"NUCLEOLIN.Normalized..CO.3669.", "CD36.Normalized..CO.1591.",
+"TNFA.Normalized..CO.5331.", "CXCL9.Normalized..CO.575.",
+"GDNF.Normalized..CO.1004.", "COLLAGEN.I.Normalized..CO.375.",
+"COLLAGEN.II.Normalized..CO.155.", "COLLAGEN.III.Normalized..CO.128.",
+"COLLAGEN.IV.Normalized..CO.71.", "COLLAGEN.V.Normalized..CO.187.")
+
+tot_nHLA_var2<-c("AT1R.U.mL..CO.17.",
+"ENO1.Normalized..CO.4218.", "FLRT2.Normalized..CO.688.",
+"VM.Normalized..CO.820.", "TUBA1B.Normalized..CO.1987.",
+"IFIH1.Normalized..CO.3870.", "PTPRN.Normalized..CO.3042.",
+"AURKA.Normalized..CO.4892.", "PPIA.Normalized..CO.3292.",
+"EIF2A.Normalized..CO.6901.", "PECR.Normalized..CO.4120.",
+"PRKCH.Normalized..CO.1048.", "CXCL11.Normalized..CO.309.",
+"CXCL10.Normalized..CO.285.", "AGRIN.Normalized..CO.504.",
+"GAPDH.Normalized..CO.508.", "MYOSIN.Normalized..CO.9341.",
+"AGT.Normalized..CO.1641.", "CHAF1B.Normalized..CO.11722.",
+"PLA2R.Normalized..CO.195.", "LG3.Normalized..CO.3801.",
+"GSTT1.Normalized..CO.6136.", "LMNA.Normalized..CO.6633.",
+"PRKCZ.Normalized..CO.9104.", "LMNB1.Normalized..CO.2065.",
+"ARHGDIB.Normalized..CO.3918.", "HNRNPK.Normalized..CO.845.",
+"IFNG.Normalized..CO.498.", "REG3A.Normalized..CO.86.",
+"NUCLEOLIN.Normalized..CO.3669.", "CD36.Normalized..CO.1591.",
+"TNFA.Normalized..CO.5331.", "CXCL9.Normalized..CO.575.",
+"GDNF.Normalized..CO.1004.", "COLLAGEN.I.Normalized..CO.375.",
+"COLLAGEN.II.Normalized..CO.155.", "COLLAGEN.III.Normalized..CO.128.",
+"COLLAGEN.IV.Normalized..CO.71.", "COLLAGEN.V.Normalized..CO.187.",
+"FIBRONECTIN.Normalized..CO.141.")
+
+tot_clin_var<-c("Age.at.Transplant", "DSA_num")
+
+tot_independant_var_cont<-c(tot_nHLA_var, tot_clin_var)
+
+nc_var<-c("AT1R.U.mL..CO.17.", "ENO1.Normalized..CO.4218.",
+"FLRT2.Normalized..CO.688.", "IFIH1.Normalized..CO.3870.",
+"AURKA.Normalized..CO.4892.", "PPIA.Normalized..CO.3292.",
+"EIF2A.Normalized..CO.6901.", "PECR.Normalized..CO.4120.",
+"PRKCH.Normalized..CO.1048.", "CXCL11.Normalized..CO.309.",
+"CXCL10.Normalized..CO.285.", "AGRIN.Normalized..CO.504.",
+"GAPDH.Normalized..CO.508.", "MYOSIN.Normalized..CO.9341.",
+"CHAF1B.Normalized..CO.11722.", "PLA2R.Normalized..CO.195.",
+"LG3.Normalized..CO.3801.", "GSTT1.Normalized..CO.6136.",
+"LMNA.Normalized..CO.6633.", "PRKCZ.Normalized..CO.9104.",
+"LMNB1.Normalized..CO.2065.", "ARHGDIB.Normalized..CO.3918.",
+"HNRNPK.Normalized..CO.845.", "IFNG.Normalized..CO.498.",
+"REG3A.Normalized..CO.86.", "NUCLEOLIN.Normalized..CO.3669.",
+"TNFA.Normalized..CO.5331.", "CXCL9.Normalized..CO.575.",
+"GDNF.Normalized..CO.1004.", "COLLAGEN.I.Normalized..CO.375.",
+"COLLAGEN.II.Normalized..CO.155.", "COLLAGEN.III.Normalized..CO.128.",
+"COLLAGEN.IV.Normalized..CO.71.", "COLLAGEN.V.Normalized..CO.187.",
+"FIBRONECTIN.Normalized..CO.141.")
+```
+
+Replace normalized fluorescence values with "1", presence or "0" absence.
+
+```{r}
+df_nocut<- load_data()
+#not doing because screws analysis
+#df<-process_columns_with_cutoff(tot_nHLA_var, df_nocut)
+df<-df_nocut
+
+```
+
+Plot the distributions of continuous variables
+
+```{r fig.width=12, fig.height=40}
+plot_variable_distributions(df_nocut, tot_independant_var_cont, "Condition")
+```
+
+Subset into pre and post transplant data
+
+```{r}
+df_pre<- subset(df, Pre==1)
+df_post<- subset(df, Pre==0)
+```
+
+Correlation plot for pre-transplant data
+
+```{r fig.width=12, fig.height=12}
+df_pre_nc <- df_nocut %>% filter(Pre==1)
+create_subset_df(df_pre_nc, tot_independant_var_cont) %>% cor() %>% corrplot()
+find_highly_correlated_variables(df_pre_nc, tot_independant_var_cont, 0.8)
+```
+
+Correlation plot for post-transplant data
+
+```{r fig.width=12, fig.height=12}
+df_post_nc <- df_nocut %>% filter(Pre==0)
+create_subset_df(df_post_nc, tot_independant_var_cont) %>% cor() %>% corrplot()
+find_highly_correlated_variables(df_post_nc, tot_independant_var_cont, 0.8)
+```
+
+variables that are colinear are replaced with a PCA
+
+```{r}
+all_colin<-c("VM.Normalized..CO.820.", "TUBA1B.Normalized..CO.1987.", "AGT.Normalized..CO.1641.", "CD36.Normalized..CO.1591.", "PPIA.Normalized..CO.3292.", "COLLAGEN.III.Normalized..CO.128.", "COLLAGEN.IV.Normalized..CO.71.", "FLRT2.Normalized..CO.688.", "COLLAGEN.I.Normalized..CO.375.")
+
+colin_set1<-c("VM.Normalized..CO.820.", "TUBA1B.Normalized..CO.1987.", "AGT.Normalized..CO.1641.", "CD36.Normalized..CO.1591.", "PPIA.Normalized..CO.3292.", "FLRT2.Normalized..CO.688.")
+colin_set2<-all_colin[!all_colin %in% colin_set1]
+
+df_pre<-addPCAComponent(df_pre, colin_set1, "PCA1")
+df_post<-addPCAComponent(df_post, colin_set1, "PCA1")
+
+df_pre<-addPCAComponent(df_pre, colin_set2, "PCA2")
+df_post<-addPCAComponent(df_post, colin_set2, "PCA2")
+
+df_pre<-df_pre %>% dplyr::select(-all_of(all_colin))
+df_post<-df_post %>% dplyr::select(-all_of(all_colin))
+
+tot_nHLA_var<-tot_nHLA_var[!tot_nHLA_var %in% all_colin]
+tot_nHLA_var<-c(tot_nHLA_var, "PCA1", "PCA2")
+tot_independant_var_cont<-tot_independant_var_cont[!tot_independant_var_cont %in% all_colin]
+tot_independant_var_cont<-c(tot_independant_var_cont, "PCA1", "PCA2")
+
+```
+
+
+Function to remove Columns in which there is only one instance (only presence or only absence) as this does not help with prediction.
+```{r}
+find_factor_columns_with_missing_level <- function(dataframe, columns) {
+  # Initialize an empty vector to store the names of columns that meet the criteria
+  columns_with_missing_level <- c()
+  
+  for (col_name in columns) {
+    if (is.factor(dataframe[[col_name]]) && length(levels(dataframe[[col_name]])) == 2) {
+      level_counts <- table(dataframe[[col_name]])
+      
+      # Check if any of the levels has no instances
+      if (any(level_counts == 0)) {
+        columns_with_missing_level <- c(columns_with_missing_level, col_name)
+      }
+    }
+  }
+  return(columns_with_missing_level)
+}
+
+```
+
+Create datasets for DGF and failure analysis
+
+```{r}
+df_pre_dgf<- subset(df_pre, !Condition==2)
+df_pre_dgf$Condition <- factor(df_pre_dgf$Condition)
+
+df_post_dgf<-subset(df_post, !Condition==2)
+df_post_dgf$Condition <- factor(df_post_dgf$Condition)
+
+df_pre_fail<-subset(df_pre, !Condition==1)
+df_pre_fail$Condition <- factor(df_pre_fail$Condition)
+
+df_post_fail<-subset(df_post, !Condition==1)
+df_post_fail$Condition <- factor(df_post_fail$Condition)
+
+```
+
+Multinomial logistic regression for pre-transplant data
+
+```{r}
+pre_dgf_formula<-create_pom_formula("Condition", tot_clin_var, tot_nHLA_var, df_pre)
+pre_dgf_model<-glm(pre_dgf_formula, family = "binomial",data = df_pre_dgf)
+#pre_dgf_step.model<-stepAIC(pre_dgf_model, direction = "backward", trace = FALSE)
+#optireg_pre_dgf<-pre_dgf_step.model$terms
+#pre_dgf_model_opt<-glm(optireg_pre_dgf, family = "binomial",data = df_pre_dgf)
+summary(pre_dgf_model)
+
+pre_fail_formula<-create_pom_formula("Condition", tot_clin_var, tot_nHLA_var, df_pre)
+pre_fail_model<-glm(pre_fail_formula, family = "binomial",data = df_pre_fail)
+#pre_fail_step.model<-stepAIC(pre_fail_model, direction = "backward", trace = FALSE)
+#optireg_pre_fail<-pre_fail_step.model$terms
+#pre_fail_model_opt<-glm(optireg_pre_fail, family = "binomial",data = df_pre_fail)
+summary(pre_fail_model)
+
+```
+
+Multinomial logistic regression for post-transplant data
+
+```{r}
+post_dgf_formula<-create_pom_formula("Condition", tot_clin_var, tot_nHLA_var, df_post)
+post_dgf_model<-glm(post_dgf_formula, family = "binomial",data = df_post_dgf)
+#post_dgf_step.model<-stepAIC(post_dgf_model, direction = "backward", trace = FALSE)
+#optireg_post_dgf<-post_dgf_step.model$terms
+#post_dgf_model_opt<-glm(optireg_post_dgf, family = "binomial",data = df_post_dgf)
+summary(post_dgf_model)
+
+post_fail_formula<-create_pom_formula("Condition", tot_clin_var, tot_nHLA_var, df_post)
+post_fail_model<-glm(post_fail_formula, family = "binomial",data = df_post_fail)
+#post_fail_step.model<-stepAIC(post_fail_model, direction = "backward", trace = FALSE)
+#optireg_post_fail<-post_fail_step.model$terms
+#post_fail_model_opt<-glm(optireg_post_fail, family = "binomial",data = df_post_fail)
+summary(post_fail_model)
+```
+
+```{r echo=F}
+library(sjPlot)
+library(sjlabelled)
+library(sjmisc)
+```
+Plotting the Odds Ratios
+
+```{r}
+library(forestmodel)
+
+to_rm<-c("COLLAGEN.V.Normalized..CO.187.", "PCA1", "PCA2", "FIBRONECTIN.Normalized..CO.141.", "PLA2R.Normalized..CO.195.", "DSA_num", "Age.at.Transplant")
+
+to_include<-tot_independant_var_cont[!tot_independant_var_cont %in% to_rm]
+f_pre<-forest_model(model_list=list("Delayed Graft function"=pre_dgf_model, "Organ Rejection"=pre_fail_model), covariates = to_include, format_options = forest_model_format_options(point_size = 2))
+f_pre
+ggsave("pre_trans_plot.svg")
+
+f_post<-forest_model(model_list=list("Delayed Graft function"=post_dgf_model, "Organ Rejection"=post_fail_model), covariates = to_include, format_options = forest_model_format_options(point_size =2))
+f_post
+ggsave("post_trans_plot.svg")
+
+```
+
+```{}
