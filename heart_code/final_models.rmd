@@ -1,0 +1,372 @@
+---
+title: "Significance of HLA Mismatches in Poor Outcomes in Heart Transplant"
+author: "Muhammad Sulman"
+output: html_document
+---
+
+```{r include=FALSE}
+library(repolr)
+library(tidyverse)
+library(survival)
+library(anytime)
+library(ggfortify)
+library(survminer)
+library(corrplot)
+library(dvmisc)
+library(MASS)
+library(broom)
+library(forestplot)
+library(rms)
+```
+
+Function to load data
+
+```{r}
+load_data<-function(){
+  df<-read.csv("data2/data_clean.csv")
+  df$Time.upper.G1 <- ifelse(df$Time.lower.G1 == df$Time.upper.G1, Inf, df$Time.upper.G1)
+  df$Time.upper.G2 <- ifelse(df$Time.lower.G2 == df$Time.upper.G2, Inf, df$Time.upper.G2)
+  df$Time.upper.G3 <- ifelse(df$Time.lower.G3 == df$Time.upper.G3, Inf, df$Time.upper.G3)
+  df$Transplant.Date<-anydate(df$Transplant.Date)
+  df$Date.of.Graft.failure<-anydate(df$Date.of.Graft.failure)
+  df$DOB<-anydate(df$DOB)
+  df$age<-as.numeric(difftime(df$Transplant.Date, df$DOB, units="days"))/365.25
+  df<-df %>% filter(!df$Pre.DSAs=="Yes")
+  df$time2fail<-ifelse(is.na(df$Date.of.Graft.failure), anydate("2024-03-10")-df$Transplant.Date, df$Date.of.Graft.failure-df$Transplant.Date)
+  df$status<-ifelse(is.na(df$Date.of.Graft.failure), 0, 1)
+  df$tot_mismatch<-df$ClassI....Mismatch..All+df$ClassII....Mismatch..All
+  df$Donor.TGLN<-df$Donor.TGLN %>% as.character()
+  df$MRN<-df$MRN %>% as.character()
+  df$trans_id<-paste0(df$Donor.TGLN, df$MRN) %>% as.numeric()
+  df <- df %>% mutate(row_number = row_number())
+  df$DRB<-df$DRB1.Mismatch.No.+df$DRB345.Mismatch.No.
+  return(df)
+}
+```
+
+Independant variables in question for analysis are saved. So are HLA mismatch variables
+
+```{r}
+HLA_vars<-c("A.Mismatch.No.", "B.Mismatch.No.", "C.Mismatch.No.", "DRB1.Mismatch.No.", "DRB345.Mismatch.No.", "DP.Mismatch.No.", "DQ.Mismatch.No.")
+independent_vars<-c(HLA_vars, "age")
+cumulative_cols<-c("ClassII....Mismatch..All", "ClassI....Mismatch..All", "tot_mismatch")
+
+HLA_al_vars<-c("A", "B", "C", "DRB1", "DRB345", "DP", "DQ")
+independent_al_vars<-c(HLA_al_vars, "age")
+
+```
+
+load data and plot Kaplan-Meier curve
+
+```{r}
+df<-load_data()
+plot(survfit(Surv(time2fail, status) ~ 1, data = df), xlab = "Time (days)", ylab = "Survival Probability", main = "Kaplan-Meier Estimate")
+```
+
+Subsetting df to make a correlation plot to check for possible confounding.
+
+```{r}
+indep_df<-df[independent_vars]
+indep_df%>%cor()%>%corrplot()
+
+svg("allele_cor.svg")
+indep_df_al<-df[independent_al_vars]
+indep_df_al%>%cor()%>%corrplot()
+dev.off()
+```
+
+Log-rank tests and Kaplan-Meier curves
+
+```{r}
+plot_quartiles_and_logrank <- function(data, independent_vars, status_var, time_var) {
+  results <- list()
+  
+  for (var in independent_vars) {
+    data[var]<-ntile(data[var], 2)
+    fit_formula <- as.formula(paste0("Surv(", time_var, ", ", status_var, ") ~ ", var))
+    fit <- surv_fit(fit_formula, data = data)
+    p <- ggsurvplot(
+      fit, 
+      data = data, 
+      xlab = "Time", 
+      ylab = "Survival probability", 
+      palette = c("#4DAD5B","#FC4E07"),
+      conf.int = TRUE,
+      surv.scale = "percent",
+    )
+    
+    log_rank_result <- survdiff(fit_formula, data = data)
+
+    # Store results
+    results[[var]] <- list(plot = p, log_rank_result = log_rank_result)
+    cat("Log-rank test result for", var, ":\n")
+    print(log_rank_result)
+    print(p)
+    #ggsave(paste0("figs/km_curve/", var, ".svg"))
+  }
+
+  return(results)
+}
+
+```
+
+Kaplan Meier curves and log-rank tests are performed for eplet mismatches
+
+```{r}
+result<-plot_quartiles_and_logrank(df, independent_vars, "status", "time2fail")
+result2<-plot_quartiles_and_logrank(df, cumulative_cols, "status", "time2fail")
+
+```
+
+Kaplan Meier curves and log-rank tests are performed for allele mismatches
+
+```{r}
+result<-plot_quartiles_and_logrank(df, independent_al_vars, "status", "time2fail")
+```
+
+
+Cox proportional hazards univariate modeling function
+
+```{r}
+univariate_coxph <- function(data, independent_vars, status_var, time_var) {
+  results <- list()
+  summary_table <- data.frame(Variable = character(),
+                              HR = numeric(),
+                              Lower_CI = numeric(),
+                              Upper_CI = numeric(),
+                              p_value = numeric(),
+                              C_index = numeric(),
+                              stringsAsFactors = FALSE)
+  
+  for (var in independent_vars) {
+    fit_formula <- as.formula(paste0("Surv(", time_var, ", ", status_var, ") ~ ", var))
+    fit <- coxph(fit_formula, data = data, na.action = na.exclude)  # Exclude NA values
+    p<-ggcoxzph(cox.zph(fit))
+    print(p)
+    # Extract summary information
+    cox_summary <- summary(fit)
+    hr <- exp(coef(fit))
+    ci <- exp(confint(fit))
+    p_val <- cox_summary$coefficients[,5]
+    c_index <- cox_summary$concordance[1]  # Extract C-index
+    
+    # Print model summary for each variable
+    cat("\nCox proportional hazards model for", var, ":\n")
+    print(cox_summary)
+    
+    # Store results in summary table
+    summary_table <- rbind(summary_table, data.frame(Variable = var, 
+                                                     HR = hr, 
+                                                     Lower_CI = ci[1], 
+                                                     Upper_CI = ci[2], 
+                                                     p_value = p_val,
+                                                     C_index = c_index))
+    
+    results[[var]] <- list(Model = fit, Summary = cox_summary)
+  }
+  
+  # Print summary table of key results
+  print(summary_table)
+  
+  return(results)
+}
+```
+
+Univariate coxph models for eplet time to failure
+
+```{r}
+cox_results<-univariate_coxph(df, independent_vars, "status", "time2fail")
+cox_results
+cox_results2<-univariate_coxph(df, cumulative_cols, "status", "time2fail")
+cox_results2
+
+```
+Time to failure for antigen MM
+```{r}
+cox_results<-univariate_coxph(df, independent_al_vars, "status", "time2fail")
+```
+Grade 1 coxph eplet
+```{r}
+cox_results<-univariate_coxph(df, independent_vars, "Status.G1", "Med.Time.G1")
+cox_multi<-coxph(Surv(Med.Time.G1, Status.G1) ~ A.Mismatch.No. + B.Mismatch.No. + C.Mismatch.No. + DRB1.Mismatch.No. + DRB345.Mismatch.No. + DP.Mismatch.No. + DQ.Mismatch.No. + age, data=df)
+summary(cox_multi)
+```
+Grade 1 coxph antigen
+```{r}
+cox_results<-univariate_coxph(df, independent_al_vars, "Status.G1", "Med.Time.G1")
+cox_multi<-coxph(Surv(Med.Time.G1, Status.G1) ~ A + B + C + DRB1 + DRB345 + DP + DQ +age, data=df)
+summary(cox_multi)
+ggcoxzph(cox.zph(cox_multi))
+
+```
+
+Grade 2 coxph eplet
+```{r}
+cox_results<-univariate_coxph(df, independent_vars, "Status.G2", "Med.Time.G2")
+cox_multi<-coxph(Surv(Med.Time.G2, Status.G2) ~ A.Mismatch.No. + B.Mismatch.No. + C.Mismatch.No. + DRB1.Mismatch.No. + DRB345.Mismatch.No. + DP.Mismatch.No. + DQ.Mismatch.No. +age, data=df)
+ggcoxzph(cox.zph(cox_multi))
+summary(cox_multi)
+```
+
+Grade 2 coxph antigen
+```{r}
+cox_results<-univariate_coxph(df, independent_al_vars, "Status.G2", "Med.Time.G2")
+```
+
+data pivoting longer
+
+```{r}
+time_cols<-c("X1", "X2", "X3", "X4", "X6", "X8", "X10", "X12", "X26", "X52")
+df_long<-df %>% pivot_longer(cols = time_cols, names_to = "Time_biopsy", values_to = "Grade")
+df_long$Time_biopsy<-df_long$Time_biopsy %>% gsub("X", "", .) %>% as.numeric()
+df_long$Grade[df_long$Grade==9]<-NA
+df_long$Grade<-df_long$Grade+1
+df_long$Grade<-df_long$Grade %>% as.factor()
+df_long <- df_long[order(df_long$Time_biopsy),]
+df_long<-df_long %>% filter(!is.na(Grade))
+
+```
+function to write repeated measures PO model
+```{r}
+create_pomtim_formula <- function(response_var, independent_vars, time,df) {
+  all_vars <- c(response_var, independent_vars) 
+  missing_vars <- setdiff(all_vars, names(df))
+  
+  if(length(missing_vars) > 0) { stop(paste("The following variables are missing in the dataframe:",
+                                             paste(missing_vars, collapse=", "), ".")) 
+    }
+  formula_str <- paste(response_var, "~", paste(independent_vars, collapse = " + "), "+", time)
+  return(as.formula(formula_str))
+}
+create_pom_formula <- function(response_var, independent_vars, time,df) {
+  all_vars <- c(response_var, independent_vars) 
+  missing_vars <- setdiff(all_vars, names(df))
+  
+  if(length(missing_vars) > 0) { stop(paste("The following variables are missing in the dataframe:",
+                                             paste(missing_vars, collapse=", "), ".")) 
+    }
+  formula_str <- paste(response_var, "~", paste(independent_vars, collapse = " + "))
+  return(as.formula(formula_str))
+}
+```
+
+Repeated measures PO model
+
+
+
+```{r}
+independent_vars
+pom_formula <- create_pomtim_formula("Grade", independent_vars, "Time_biopsy" ,df_long)
+pom_formula
+
+
+model <- polr(pom_formula, data = df_long)
+#model <- polr(Grade ~ Time_biopsy, data = df_long, Hess = TRUE)
+coefficients <- summary(model)$coefficients
+p_value <- (1 - pnorm(abs(coefficients[ ,"t value"]), 0, 1))*2
+
+coefficients <- summary(model)$coefficients
+coefficients <- cbind(coefficients, p_value)
+
+# calculate odds ratios
+coefficients <- cbind(coefficients, odds_ratio = exp(coefficients[ ,"Value"]))
+
+# combine with coefficient and p_value
+printCoefmat(coefficients[ ,c("Value", "Std. Error", "odds_ratio", "p_value")], 
+             P.values=TRUE, 
+             has.Pvalue=TRUE)
+
+library(brant)
+brant(model)
+
+df_long$trans_id<-df_long%>%filter()
+glm(pom_formula, data = df_long, family = binomial(link = "logit"))
+
+#repolr(pom_formula, subjects = "trans_id",data = df_long, categories = 4, times = c(1, 2, 3, 4, 6, 8, 10, 12, 26, 52), corstr = "ar1", 
+#        tol = 0.001, scalevalue = 1, alpha = 0.5, po.test=TRUE, fixed=FALSE) 
+
+
+```
+po with max grades
+```{r}
+df$Max_Grade<-df$Max.Grade %>% as.factor()
+pom_formula2 <- create_pom_formula("Max_Grade", independent_vars, "time2fail" ,df)
+model2 <- polr(pom_formula2, data = df, Hess = TRUE)
+coefficients <- summary(model2)$coefficients
+p_value <- (1 - pnorm(abs(coefficients[ ,"t value"]), 0, 1))*2
+coefficients <- cbind(coefficients, p_value)
+coefficients <- cbind(coefficients, odds_ratio = exp(coefficients[ ,"Value"]))
+printCoefmat(coefficients[ ,c("Value", "Std. Error", "odds_ratio", "p_value")], 
+             P.values=TRUE, 
+             has.Pvalue=TRUE)
+conf<-exp(confint(model2, level = 0.90))
+var<-c("A.Mismatch.No.", "B.Mismatch.No.", "C.Mismatch.No.", "", "DP.Mismatch.No.", "DQ.Mismatch.No.", "age")
+lower<-c(conf[,1])
+upper<-c(conf[,2])
+odds<-exp(coefficients[ 0:8,"Value"])
+ndf <- data.frame(Variable = independent_vars, Lower = lower, Upper = upper, Odds = odds)
+ndf$err <- ndf$Upper - ndf$Odds
+
+svg("figs/forest_plot.svg")
+ndf %>% forestplot(labeltext=Variable, mean=Odds, lower=Lower, upper=Upper, xlab="Odds Ratio", zero = 1,
+             cex  = 2, lineheight = "auto")
+dev.off()
+```
+
+```{r}
+
+```
+
+```{r}
+df$X1st.DSA<-anydate(df$X1st.DSA)
+df$X1st.DSA_status<-ifelse(df$X1st.DSA==anydate("2024-03-10"), 0, 1)
+df$X1st.DSA<-ifelse(is.na(df$X1st.DSA), anydate("2024-03-10"), df$X1st.DSA)
+df$X1st.DSA_time<-anydate(df$X1st.DSA)-df$Transplant.Date
+df$X1st.DSA_status
+df$Transplant.Date
+ggsurvplot(surv_fit(Surv(X1st.DSA_time, X1st.DSA_status) ~ 1, data = df), 
+           data = df, 
+           xlab = "Time to Failure", 
+           ylab = "Survival Probability",
+           title = "Kaplan-Meier Survival Curves",)
+univariate_coxph(df, independent_vars, "X1st.DSA_status", "X1st.DSA_time")
+plot_quartiles_and_logrank(df, independent_vars, "X1st.DSA_status", "X1st.DSA_time")
+```
+
+plot density curves
+```{r}
+plot_density_faceted <- function(data, colnames) {
+  # Check if all colnames exist in the dataframe
+  missing_cols <- colnames[!colnames %in% names(data)]
+  if(length(missing_cols) > 0) {
+    stop("The following columns are missing from the dataframe: ", paste(missing_cols, collapse = ", "), ".")
+  }
+  
+  # Melt the dataframe to long format for faceting
+  long_data <- reshape2::melt(data, measure.vars = colnames)
+  
+  # Create the density plot
+  p <- ggplot(long_data, aes(x = value)) +
+    geom_density(aes(fill = variable), alpha = 0.5) +
+    facet_wrap(~ variable, scales = "free") +
+    labs(x = "Value", y = "Density") +
+    theme_minimal()
+  
+  svg("figs/density_plot.svg")
+  print(p)
+  dev.off()
+}
+plot_density_faceted(df, HLA_vars)
+plot_density_faceted(df, HLA_al_vars)
+```
+
+```{r}
+```
+
+DSA survival curve (eplet)
+```{r}
+cox_results<-univariate_coxph(df, independent_al_vars, "X1st.DSA_status", "X1st.DSA_time")
+
+
+```
+

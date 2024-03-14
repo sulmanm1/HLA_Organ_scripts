@@ -80,7 +80,7 @@ def remempty(data, columns):
     print(data.iloc[data[columns].isnull().any(axis=1).to_string()])
 
 def main():
-    data=pd.read_csv("data/data.csv")
+    data=pd.read_csv("data2/data.csv")
     data=data_modname(data,"First name","Last Name")
 
     result_columns=['1', '2', '3', '4', '6', '8', '10', '12', '26', '52']
@@ -101,7 +101,7 @@ def main():
     data=data.dropna(subset=independent_vars)
     data = max_grade(data, daydict)
 
-    data.to_csv("data/data_clean.csv", index=False)
+    data.to_csv("data2/data_clean.csv", index=False)
 
 
 
