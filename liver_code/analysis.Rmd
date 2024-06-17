@@ -1,0 +1,200 @@
+---
+title: "Significance of Eplet Load in Liver Failure"
+author: "Muhammad Sulman"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(corrplot)
+library(survminer)
+library(survival)
+library(lubridate)
+library(ggplot2)
+library(ggfortify)
+library(timereg)
+library(car)
+```
+
+Function to load data from file and some reformatting.
+
+```{r}
+load_data <- function(filepath){
+  #save csv to variable
+  df <- read.csv(filepath)
+  
+  #subtract 1 from age at transplant
+  df$Age.at.Transplant <- df$Age.at.Transplant - 1
+  
+  #add donor age
+  df$Donor.DOB <- mdy(df$Donor.DOB)
+  df$Date.Anesthesia.Start <- mdy(df$Date.Anesthesia.Start)
+  df$Donor.Age <- as.numeric(df$Date.Anesthesia.Start - df$Donor.DOB, units="days")
+  
+  #Adds Time to Graft failure and status column
+  df$Date.of.Graft.Failure <- mdy(df$Date.of.Graft.Failure)
+  df$status <- ifelse(is.na(df$Date.of.Graft.Failure), 0 , 1)
+  df$Time <- as.numeric(df$Date.of.Graft.Failure - df$Date.Anesthesia.Start, units="days")
+  df <- df %>% filter(Time>0)
+  
+  #when the function is called, return the dataframe
+  return(df)
+}
+```
+
+Load data and save to a variable
+
+```{r}
+df <- load_data("data/liver_data.csv")
+```
+
+Saves the name of independent variable columns, including HLA and clinical factors, to a vector
+
+```{r}
+HLA_vars <- c("HLA.A.Epitope.Mismatch.No.",
+              "HLA.B.Epitope.Mismatch.No.",
+              "HLA.C.Epitope.Mismatch.No.",
+              "HLA.DRB1.Epitope.Mismatch.No.",
+              "HLA.DRB345.Epitope.Mismatch.No.",
+              "HLA.DP.Epitope.Mismatch.No.",
+              "HLA.DQ.Epitope.Mismatch.No.")
+
+#Donor age is missing data, as such, may cause issues. Two variables created, one with and one without Donor age. 
+clin_vars1 <- c("Number.of.Transplant",
+                "BMI.of.Recipient",
+                "Age.at.Transplant")
+
+#with Donor Age
+clin_vars2 <- c("Number.of.Transplant",
+                "BMI.of.Recipient",
+                "Age.at.Transplant", 
+                "Donor.Age")
+
+#all independant variables
+indep_vars1 <- c(HLA_vars, clin_vars1)
+indep_vars2 <- c(HLA_vars, clin_vars2)
+
+#all variables, including Time, the dependant variable
+all_vars1 <- c(indep_vars1, "Time", "status")
+all_vars2 <- c(indep_vars2, "Time", "status")
+```
+
+Simplified data frames with relevant variables
+
+```{r}
+df_short1 <- df[all_vars1] %>% na.omit()
+df_short2 <- df[all_vars2] %>% na.omit()
+```
+
+Make a correlation plot of all variables
+
+```{r fig.width=12, fig.height=12}
+#Note that age at transplant and Time negatively associate. DQ, DRB and DP also associate (likely proximal DNA regions, therefore lack of rearrangement) 
+df_short2 %>% subset(select = -status) %>% cor() %>% corrplot()
+```
+
+Function for creating survival curves for every independant variable after stratifying by "high" (above median) and "low" (Below medium).
+
+```{r}
+plot_surv_and_logrank <- function(data, independent_vars, status_var, time_var) {
+  results <- list()
+  
+  for (var in independent_vars) {
+    data[[var]] <- ntile(data[[var]], 2) # Ensure data is modified by reference
+    fit_formula <- as.formula(paste0("Surv(", time_var, ", ", status_var, ") ~ ", var))
+    fit <- surv_fit(fit_formula, data = data)
+    p <- ggsurvplot(
+      fit, 
+      data = data, 
+      xlab = "Time", 
+      ylab = "Survival probability", 
+      palette = c("#4DAD5B","#FC4E07"),
+      conf.int = FALSE,
+      surv.scale = "percent",
+      legend.labs = c(paste0("Low ", var), paste0("High ", var)) # Update legend labels
+    )
+    
+    log_rank_result <- survdiff(fit_formula, data = data)
+
+    # Store results
+    results[[var]] <- list(plot = p, log_rank_result = log_rank_result)
+    cat("Log-rank test result for", var, ":\n")
+    print(log_rank_result)
+    print(p)
+    
+    ggsave(paste0("img/", var, ".svg"), plot = p$plot)
+  }
+
+  return(results)
+}
+```
+
+Call function and draw survival function for high (above median) and low of each independent variable. log rank tests are performed.
+
+```{r}
+#donor age, age at transplant, and number of transplant significantly reducve survival. 
+result<-plot_surv_and_logrank(df_short2, indep_vars2, "status", "Time")
+```
+
+Function to output survival formula
+
+```{r}
+create_survival_formula <- function(independent_vars, status_var, time_var) {
+  # Combine the status and time variables into the survival term of the formula
+  survival_term <- paste0("Surv(", time_var, ", ", status_var, ")")
+
+  independent_vars_str <- paste(independent_vars, collapse = " + ")
+  formula_str <- paste(survival_term, "~", independent_vars_str)
+  
+  # Convert the string to an actual formula object
+  formula_obj <- as.formula(formula_str)
+  
+  return(formula_obj)
+}
+```
+
+CoxPH modelling
+
+```{r fig.width=15, fig.height=15}
+multi_form <- create_survival_formula(indep_vars2, "status", "Time")
+cph_multi <- coxph(multi_form, data= df_short2)
+summary(cph_multi)
+
+#time varying effects of age, therefore it must be modeled differently
+ggcoxzph(cox.zph(cph_multi))
+```
+
+Aalen's model was used, as previous residual analysis on cox model showed that there is a time-varying effect, making regular cox modelling inappropriate.
+
+
+```{r}
+df_short2$Donor.Age<-df_short2$Donor.Age/365
+
+aalen_model <- aalen(Surv(Time, status) ~ HLA.A.Epitope.Mismatch.No. +
+  HLA.B.Epitope.Mismatch.No. + HLA.C.Epitope.Mismatch.No. +
+  HLA.DRB1.Epitope.Mismatch.No. +
+  HLA.DRB345.Epitope.Mismatch.No. + HLA.DP.Epitope.Mismatch.No. + Donor.Age+
+  HLA.DQ.Epitope.Mismatch.No.+ Number.of.Transplant + BMI.of.Recipient + Age.at.Transplant,
+                             data = df_short2,max.time = 2000, n.sim = 5000, residuals = 1)
+
+#test if model appropriate
+average_dM <- apply(aalen_model$residuals$dM, 1, mean) # sum martingale increment
+qqPlot(average_dM) #seems good enough, residuals are normally distributed
+plot(aalen_model$residuals$time, average_dM, type = 'l', main = "Average Martingale Increments", xlab = "Time", ylab = "Average dM") #martingale residuals don't seem to have a relationship with time upon visual inspection
+
+
+# Plot the average martingale increments against time
+summary(aalen_model)
+plot(aalen_model)
+```
+
+
+Age at transplant and number of transplant are significant, with age decreasing survival and number of prior transplants increasing survival. The hazard functions over time are shown above.
+
+-   HLA-DP worsens survival and has a time varying effect .
+
+-   Higher Age improves survival?! Maybe this is because older =\> weaker immune system =\> lower chance of rejection. Also time varying.
+
+-   Number of transplant worsen survival. Time varying effect.
+
+-   Chisq test pvalue indicates that the model has a significant fit to the data.
